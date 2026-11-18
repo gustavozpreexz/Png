@@ -1,0 +1,1443 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Criar projeto
+        run: |
+          mkdir -p app/src/main/java/com/ddsconverter/app app/src/main/assets app/src/main/res/mipmap-xxhdpi
+          cat > settings.gradle <<'FIM_0_ARQUIVO'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "DDSparaPNG"
+          include ':app'
+          FIM_0_ARQUIVO
+          cat > build.gradle <<'FIM_1_ARQUIVO'
+          plugins { id 'com.android.application' version '8.2.2' apply false }
+          FIM_1_ARQUIVO
+          cat > gradle.properties <<'FIM_2_ARQUIVO'
+          org.gradle.jvmargs=-Xmx2g
+          android.nonTransitiveRClass=true
+          FIM_2_ARQUIVO
+          cat > app/build.gradle <<'FIM_3_ARQUIVO'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.ddsconverter.app'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.ddsconverter.app"
+                  minSdk 29
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          FIM_3_ARQUIVO
+          cat > app/src/main/AndroidManifest.xml <<'FIM_4_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application android:label="DDS para PNG" android:allowBackup="true" android:icon="@mipmap/ic_launcher"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          FIM_4_ARQUIVO
+          cat > app/src/main/java/com/ddsconverter/app/MainActivity.java <<'FIM_5_ARQUIVO'
+          package com.ddsconverter.app;
+
+          import android.app.Activity;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import java.io.OutputStream;
+
+          public class MainActivity extends Activity {
+              private static final int REQ = 1;
+              private WebView web;
+              private ValueCallback<Uri[]> pending;
+
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  web = new WebView(this);
+                  setContentView(web);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  web.addJavascriptInterface(new Bridge(), "AndroidBridge");
+                  web.setWebViewClient(new WebViewClient());
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (pending != null) pending.onReceiveValue(null);
+                          pending = cb;
+                          Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("*/*");
+                          i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                          try {
+                              startActivityForResult(Intent.createChooser(i, "Escolher arquivos"), REQ);
+                          } catch (Exception e) {
+                              pending = null;
+                              cb.onReceiveValue(null);
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  web.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override protected void onActivityResult(int req, int res, Intent data) {
+                  if (req == REQ && pending != null) {
+                      pending.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+                      pending = null;
+                  } else {
+                      super.onActivityResult(req, res, data);
+                  }
+              }
+
+              @Override public void onBackPressed() {
+                  if (web.canGoBack()) web.goBack(); else super.onBackPressed();
+              }
+
+              class Bridge {
+                  @JavascriptInterface public String save(String name, String b64) {
+                      try {
+                          byte[] d = Base64.decode(b64, Base64.DEFAULT);
+                          final String safe = name.replace('/', '_');
+                          String l = safe.toLowerCase();
+                          String mime = l.endsWith(".zip") ? "application/zip" : l.endsWith(".png") ? "image/png" : "application/octet-stream";
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+                          v.put(MediaStore.Downloads.MIME_TYPE, mime);
+                          v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                          Uri u = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                          try (OutputStream o = getContentResolver().openOutputStream(u)) { o.write(d); }
+                          runOnUiThread(() -> Toast.makeText(MainActivity.this, "Salvo em Downloads: " + safe, Toast.LENGTH_LONG).show());
+                          return "ok";
+                      } catch (Exception e) {
+                          final String m = String.valueOf(e);
+                          runOnUiThread(() -> Toast.makeText(MainActivity.this, "Erro ao salvar: " + m, Toast.LENGTH_LONG).show());
+                          return "erro";
+                      }
+                  }
+              }
+          }
+          FIM_5_ARQUIVO
+          cat > app/src/main/assets/index.html <<'FIM_6_ARQUIVO'
+          <!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <title>DDS para PNG</title>
+          <link rel="preconnect" href="https://fonts.googleapis.com">
+          <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;600&display=swap">
+          <style>
+          :root{--bg:#eceef5;--surface:#fff;--ink:#1c2040;--muted:#5d6382;--line:#c9cde0;--accent:#2f4bff;--on-accent:#fff;--ck1:#dfe2ee;--ck2:#f6f7fb;--err:#b3261e;
+          box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+          @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#13152a;--surface:#1c1f3a;--ink:#eceefb;--muted:#9fa5c9;--line:#363a63;--accent:#7e91ff;--on-accent:#10132b;--ck1:#2a2e52;--ck2:#222644;--err:#ffb4ab}}
+          :root[data-theme="dark"]{--bg:#13152a;--surface:#1c1f3a;--ink:#eceefb;--muted:#9fa5c9;--line:#363a63;--accent:#7e91ff;--on-accent:#10132b;--ck1:#2a2e52;--ck2:#222644;--err:#ffb4ab}
+          html{scroll-padding-top:env(safe-area-inset-top,0px)}
+          *,*::before,*::after{box-sizing:inherit}
+          body{margin:0;background:#1b1d2b;color:var(--ink);font:400 16px/1.5 Figtree,system-ui,-apple-system,"Segoe UI",sans-serif}
+          body::before{content:none}
+          main{width:min(720px,calc(100% - 20px));margin:14px auto 24px;padding:24px 18px 32px;background:color-mix(in srgb,var(--bg) 88%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-radius:20px}
+          select{font:inherit;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+          .btns{display:flex;gap:8px;flex-wrap:wrap}
+          button:disabled{opacity:.6;cursor:progress}
+          [hidden]{display:none!important}
+          .tabs{display:flex;gap:8px;margin-bottom:16px}
+          .tabs button{flex:1}
+          .tabs button[aria-pressed="false"]{background:transparent;color:var(--ink);border:1px solid var(--line)}
+          #flist{display:grid;gap:10px;margin-top:14px}
+          input[type=search],.meta input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);min-width:0}
+          input[type=search]{width:100%;margin-top:12px}
+          .meta input{flex:1 1 120px}
+          textarea{display:block;width:100%;min-height:50vh;border:0;border-top:1px solid var(--line);padding:12px;background:var(--surface);color:var(--ink);font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto;tab-size:2;resize:vertical}
+          #ed{margin-top:14px}
+          h1{font:700 clamp(2rem,9vw,3rem)/1.05 "Bricolage Grotesque",Figtree,system-ui,sans-serif;margin:0 0 10px;letter-spacing:-.02em}
+          .lead{color:var(--muted);margin:0 0 22px;max-width:52ch}
+          .drop{display:block;border:2px dashed var(--line);border-radius:16px;padding:30px 18px;text-align:center;cursor:pointer;background:
+          conic-gradient(var(--ck1) 25%,var(--ck2) 0 50%,var(--ck1) 0 75%,var(--ck2) 0) 0 0/20px 20px;transition:border-color .15s}
+          .drop:hover,.drop.over,.drop:focus-within{border-color:var(--accent)}
+          .drop strong{display:inline-block;background:var(--surface);padding:8px 14px;border-radius:10px;font-weight:600}
+          .drop span{display:block;margin-top:10px;color:var(--ink);font-size:.95rem;text-shadow:0 0 6px var(--bg),0 0 6px var(--bg)}
+          .drop input{position:absolute;opacity:0;width:1px;height:1px}
+          .opts{display:flex;gap:10px;align-items:center;margin:16px 0 4px;color:var(--muted);font-size:.95rem}
+          .opts input{width:20px;height:20px;accent-color:var(--accent)}
+          #list{display:grid;gap:14px;margin-top:18px}
+          .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+          .pic{background:conic-gradient(var(--ck1) 25%,var(--ck2) 0 50%,var(--ck1) 0 75%,var(--ck2) 0) 0 0/16px 16px;display:flex;justify-content:center;padding:10px}
+          .pic canvas{max-width:100%;height:auto;max-height:60vh;image-rendering:auto}
+          .meta{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 14px;flex-wrap:wrap}
+          .meta b{display:block;overflow-wrap:anywhere;font-weight:600}
+          .meta small{color:var(--muted)}
+          button{font:600 1rem Figtree,system-ui,sans-serif;background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:10px 16px;cursor:pointer;min-height:44px}
+          button:focus-visible,.drop:focus-within{outline:3px solid var(--accent);outline-offset:2px}
+          button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+          .err{padding:14px;color:var(--err)}
+          .bar{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+          .hint{color:var(--muted);font-size:.9rem;margin-top:22px}
+
+          /* ===== visual v2 ===== */
+          main{border:1px solid rgba(255,255,255,.2);box-shadow:0 24px 70px rgba(0,0,0,.45);border-radius:24px;padding:26px 18px 34px;background:color-mix(in srgb,var(--surface) 80%,transparent)}
+          h1{background:linear-gradient(90deg,var(--accent),#ff8a1f);-webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
+          .lead{font-size:1.02rem}
+          button{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 60%,#8a5cff));border-radius:12px;box-shadow:0 6px 16px color-mix(in srgb,var(--accent) 35%,transparent);transition:transform .1s,filter .15s}
+          button:hover{filter:brightness(1.08)}button:active{transform:scale(.97)}
+          button.ghost,.tabs button[aria-pressed="false"]{box-shadow:none;background:transparent}
+          .tabs{background:color-mix(in srgb,var(--bg) 70%,transparent);padding:5px;border-radius:16px;border:1px solid var(--line)}
+          .tabs button{min-height:42px;padding:8px 6px;font-size:.92rem}
+          .tabs button[aria-pressed="false"]{border-color:transparent;color:var(--muted)}
+          .drop{border-radius:20px;padding:34px 18px}
+          .drop::before{content:"\2B06";display:block;font-size:2rem;line-height:1;margin-bottom:10px}
+          .card{border-radius:16px;box-shadow:0 8px 24px rgba(10,14,40,.14)}
+          .meta b{font-weight:700}
+          .opts{background:color-mix(in srgb,var(--bg) 60%,transparent);padding:8px 12px;border-radius:12px;margin:8px 0 0}
+          .hint{line-height:1.5}
+          .panes{display:grid;grid-template-columns:1fr;border-top:1px solid var(--line)}
+          #tree{max-height:42vh;overflow:auto;border-bottom:1px solid var(--line)}
+          .node{display:block;width:100%;text-align:left;background:transparent!important;color:var(--ink);border:0;border-radius:0;box-shadow:none;min-height:36px;padding:6px 10px;font:500 .88rem Figtree,system-ui,sans-serif;white-space:nowrap}
+          .node.sel{background:var(--accent)!important;color:var(--on-accent)}
+          #props,#i3dfiles{padding:12px;display:grid;gap:8px}
+          .prop{display:grid;grid-template-columns:96px 1fr;gap:8px;align-items:center;font-size:.82rem;color:var(--muted)}
+          .prop input{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);min-width:0;width:100%}
+          @media(min-width:700px){.panes{grid-template-columns:1fr 1fr}#tree{border-bottom:0;border-right:1px solid var(--line);max-height:55vh}}
+
+          /* ===== visual agrícola minimalista ===== */
+          :root{--bg:#eee7d6;--surface:#f7f2e5;--ink:#2a281d;--muted:#6d684f;--line:#d3c9ad;--accent:#3d6b34;--on-accent:#f7f2e5;--ck1:#e2d9c0;--ck2:#f1ebd9;--err:#9b2c1f}
+          @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1c14;--surface:#26251b;--ink:#ebe4cf;--muted:#a39c81;--line:#3a392a;--accent:#8db46f;--on-accent:#18200f;--ck1:#2d2c20;--ck2:#232218;--err:#f0a595}}
+          :root[data-theme="dark"]{--bg:#1d1c14;--surface:#26251b;--ink:#ebe4cf;--muted:#a39c81;--line:#3a392a;--accent:#8db46f;--on-accent:#18200f;--ck1:#2d2c20;--ck2:#232218;--err:#f0a595}
+          body{background:var(--bg)}
+          main{width:min(680px,100%);margin:0 auto;padding:30px 18px 44px;background:none;border:0;border-radius:0;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+          h1{font-family:Fraunces,Georgia,"Times New Roman",serif;font-weight:600;letter-spacing:-.01em;background:none;color:var(--ink);-webkit-background-clip:border-box;background-clip:border-box;display:block;margin-bottom:0}
+          h1::after{content:"";display:block;width:76px;height:12px;margin-top:14px;background:repeating-linear-gradient(90deg,var(--accent) 0 2px,transparent 2px 8px)}
+          .lead{color:var(--muted);margin:16px 0 26px;font-size:1rem}
+          .tabs{background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;gap:20px;margin-bottom:22px}
+          .tabs button,.tabs button[aria-pressed="false"],.tabs button[aria-pressed="true"]{flex:0 0 auto;background:none;box-shadow:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:10px 0;min-height:44px;font-size:.95rem;color:var(--muted)}
+          .tabs button[aria-pressed="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+          button{background:var(--accent);color:var(--on-accent);border-radius:6px;box-shadow:none;font-weight:600}
+          button:hover{filter:none;background:color-mix(in srgb,var(--accent) 86%,var(--ink))}
+          button.ghost{background:transparent;color:var(--ink);border:1px solid var(--muted)}
+          button.ghost:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+          .drop{border:1px solid var(--line);border-radius:6px;padding:30px 18px;background:repeating-linear-gradient(0deg,transparent 0 9px,var(--line) 9px 10px),var(--surface)}
+          .drop::before{content:none}
+          .drop strong{background:var(--accent);color:var(--on-accent);border-radius:6px;padding:10px 18px}
+          .drop span{text-shadow:none;color:var(--muted);background:var(--surface);padding:2px 8px;display:inline-block}
+          .card{background:var(--surface);border:1px solid var(--line);border-radius:6px;box-shadow:none}
+          .opts{background:none;border-radius:0;border-bottom:1px solid var(--line);padding:11px 0;margin:0;color:var(--muted)}
+          .hint{color:var(--muted);font-size:.85rem}
+          select,input[type=search],.meta input,.prop input,textarea{border-radius:6px}
+
+          #prog{margin:-6px 0 18px}
+          .pbar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+          .pbar i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+          .ptxt{display:flex;justify-content:space-between;font-size:.85rem;color:var(--muted);margin-top:6px}
+          .ptxt b{color:var(--ink)}
+          .tabs{overflow-x:auto;gap:16px}
+          details summary{cursor:pointer;color:var(--muted);padding:6px 0}
+          #mProps input[type=number]{flex:1;min-width:0}
+          #mProps input[type=color]{height:38px;padding:2px}
+          </style>
+          </head>
+          <body>
+          <main>
+          <h1>DDS para PNG</h1>
+          <p class="lead">Escolha um ou mais arquivos .dds e baixe cada um como PNG ou AST. A conversão acontece no seu aparelho: nada é enviado a servidores.</p>
+
+          <div class="tabs"><button id="tabC" aria-pressed="true">Converter</button><button id="tabE" aria-pressed="false">Editar</button><button id="tabI" aria-pressed="false">I3D</button><button id="tabM" aria-pressed="false">Criar mod</button><button id="tabD" aria-pressed="false">Modelar</button></div>
+          <div id="prog" hidden><div class="pbar"><i id="pfill"></i></div><div class="ptxt"><span id="plab"></span><b id="pct">0%</b></div></div>
+
+          <div id="viewConv">
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept=".dds,.zip,application/zip" multiple>
+            <strong>Escolher DDS ou ZIP</strong>
+            <span>ou arraste-os para cá. Um .zip é aberto e todos os .dds dentro dele são convertidos</span>
+          </label>
+
+          <div class="bar"><button class="ghost" id="pickdir">Escolher uma pasta</button><input type="file" id="dir" webkitdirectory multiple hidden></div>
+          <label class="opts"><input type="checkbox" id="opaque"> Remover transparência (fundo opaco)</label>
+
+          <label class="opts"><input type="checkbox" id="keepicon"> Manter o ícone do mod e as imagens da loja em .dds (não converter)</label>
+          <label class="opts"><input type="checkbox" id="refs" checked> Ao gerar o mod, atualizar as referências .dds nos arquivos .xml/.i3d/.lua</label>
+          <label class="opts">Escala <select id="scale"><option value="0.5">50% (padrão do script)</option><option value="0.25">25%</option><option value="0.75">75%</option><option value="1">100%</option></select><select id="ext" hidden><option value="ast">ast</option></select></label>
+          <label class="opts"><input type="checkbox" id="flip" checked> Inverter verticalmente (igual ao script)</label>
+
+          <p class="hint" id="status" aria-live="polite"></p>
+          <div id="modbar" style="display:grid;gap:10px;margin-top:14px"></div>
+          <details id="fl" style="margin-top:14px"><summary>Arquivos lidos (<span id="cnt">0</span>)</summary><div id="list" aria-live="polite"></div></details>
+          <div class="bar" id="bar" hidden><button id="all">Baixar todos (PNG em .zip)</button><button id="allast">Baixar todos (AST em .zip)</button><button class="ghost" id="clear">Limpar lista</button></div>
+          </div>
+
+          <div id="viewEdit" hidden>
+            <label class="drop" id="dropE">
+              <input type="file" id="fileE" accept=".zip,application/zip">
+              <strong>Abrir mod (.zip)</strong>
+              <span>para editar textos, trocar ou excluir arquivos (serve para FS19, FS22 e FS25)</span>
+            </label>
+            <p class="hint" id="modinfo"></p>
+            <div class="card" id="ed" hidden>
+              <div class="meta"><b id="edname"></b><div class="btns"><button id="edsave">Salvar</button><button class="ghost" id="edclose">Fechar</button></div></div>
+              <div class="meta"><input id="fnd" placeholder="Localizar"><input id="rpl" placeholder="Trocar por"><button class="ghost" id="edrepl">Trocar tudo</button></div>
+              <textarea id="edtext" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+            </div>
+            <input type="search" id="filt" placeholder="Filtrar arquivos…" hidden>
+            <div id="flist"></div>
+            <div class="bar" id="ebar" hidden><button id="dlmod">Baixar mod editado</button></div>
+          </div>
+
+          <div id="viewI3d" hidden>
+            <label class="drop" id="dropI">
+              <input type="file" id="fileI" accept=".i3d,.xml">
+              <strong>Abrir arquivo .i3d</strong>
+              <span>ou use o botão “I3D” na lista de arquivos de um mod aberto em “Editar mod”</span>
+            </label>
+            <div class="card" id="i3dcard" hidden style="margin-top:14px">
+              <div class="meta"><div><b id="i3dname"></b><br><small id="i3dstat"></small></div><div class="btns"><button id="i3dapply">Aplicar no mod</button><button class="ghost" id="i3ddl">Baixar (.xml)</button></div></div>
+              <div class="panes"><div id="tree"></div><div id="props"></div></div>
+              <div class="meta" style="border-top:1px solid var(--line)"><b>Texturas e arquivos (Files)</b><button class="ghost" id="i3dext">Trocar .dds pela extensão do AST</button></div>
+              <div id="i3dfiles"></div>
+            </div>
+            <p class="hint">Este editor altera a estrutura do .i3d: nós da cena, nomes, posição, rotação, escala, visibilidade, atributos e caminhos de texturas. Não é o GIANTS Editor completo: não há janela 3D, nem edição de malhas (.shapes), nem exportação.</p>
+          </div>
+
+          <div id="viewMake" hidden>
+            <div class="card"><div style="padding:14px;display:grid;gap:10px">
+              <b>Novo mod</b>
+              <label class="prop"><span>Nome</span><input id="mkName" placeholder="Meu Mod"></label>
+              <label class="prop"><span>Autor</span><input id="mkAuthor"></label>
+              <label class="prop"><span>Versão</span><input id="mkVer" value="1.0.0.0"></label>
+              <label class="prop"><span>descVersion</span><input id="mkDesc" placeholder="o número do seu jogo"></label>
+              <label class="prop"><span>Descrição</span><input id="mkText"></label>
+              <label class="opts"><input type="checkbox" id="mkI3d"> Incluir cena .i3d vazia para editar na aba I3D</label>
+            </div></div>
+            <label class="drop" id="dropM" style="margin-top:14px">
+              <input type="file" id="mkFiles" multiple>
+              <strong>Adicionar arquivos</strong>
+              <span>imagens (DDS, PNG, JPG) viram .ast; os outros arquivos entram sem mudança. Um arquivo chamado icon.* vira o ícone do mod</span>
+            </label>
+            <div id="mkList"></div>
+            <div class="bar"><button id="mkBuild">Baixar mod (.zip)</button></div>
+            <p class="hint">Cria o <b>modDesc.xml</b> e empacota seus arquivos. A escala e o flip usados nas texturas são os da aba Converter. Para criar formas 3D simples, use a aba Modelar; modelos complexos podem vir do Blender ou do GIANTS Editor (adicione o .i3d e o .shapes pelo botão acima).</p>
+          </div>
+
+          <div id="viewModel" hidden>
+            <div class="card">
+              <canvas id="mcv" style="display:block;width:100%;height:52vh;touch-action:none"></canvas>
+              <div class="meta" style="border-top:1px solid var(--line)"><div class="btns">
+                <button data-t="box">Cubo</button><button data-t="cyl">Cilindro</button><button data-t="sph">Esfera</button><button data-t="cone">Cone</button><button data-t="plane">Plano</button>
+              </div></div>
+            </div>
+            <div class="card" style="margin-top:12px">
+              <div class="btns" id="mList" style="padding:10px"></div>
+              <div id="mProps" style="padding:12px;display:grid;gap:8px;border-top:1px solid var(--line)"></div>
+            </div>
+            <label class="prop" style="margin-top:12px"><span>Nome do modelo</span><input id="mName" value="meu_modelo"></label>
+            <div class="bar"><button id="mOpen">Abrir no Editor I3D</button><button class="ghost" id="mDl">Baixar .i3d (.zip)</button><button class="ghost" id="mSend">Enviar para Criar mod</button></div>
+            <p class="hint">Arraste para girar, pince (ou use a roda) para aproximar e toque num objeto para selecioná-lo. Mova, gire, redimensione e pinte as formas pelos campos. Não é o GIANTS Editor: não há edição de vértices, UVs, animações nem shaders. O .i3d sai com malhas em texto e deve ser conferido no GIANTS Editor (a ordem de rotação e o sentido das faces podem precisar de ajuste).</p>
+          </div>
+
+          <p class="hint">Entrada: DXT1, DXT3, DXT5 (BC1–BC3), BC4, BC5 e pixels sem compressão (RGB/RGBA/BGRA, incluindo cabeçalho DX10); só o primeiro nível de mipmap. BC6H e BC7 ainda não são suportados. O AST segue o formato GS2D do BH AST Converter (ASTC 6×6 com mipmaps, escala e tamanhos por nome de textura) e é entregue dentro de um .zip, porque o visualizador só permite salvar alguns tipos de arquivo. Extraia o .zip para obter o arquivo. Ao abrir um .zip ou uma pasta, a estrutura de pastas é mantida nas conversões em lote. Com um .zip de mod, os botões “Baixar mod com PNG/AST” geram uma cópia do mod com cada .dds já trocada pelo arquivo convertido, no mesmo lugar. Atenção: o Farming Simulator de PC carrega texturas em .dds. Se o seu jogo só aceita AST, use “Baixar mod com AST”: o ícone do mod também é convertido, a menos que você marque a opção de mantê-lo em .dds. Use isso para edição ou testes e guarde o mod original.</p>
+          </main>
+
+          <script>
+          /* Ponte com o Android: salva arquivos na pasta Downloads */
+          window.claude={use:async n=>n==='downloads'?{save:({filename,data})=>new Promise((res,rej)=>{
+            const fr=new FileReader();
+            fr.onload=()=>{try{AndroidBridge.save(filename,String(fr.result).split(',')[1]);res({status:'saved'});}catch(e){rej({code:'unavailable',message:String(e)});}};
+            fr.onerror=()=>rej({code:'unavailable',message:'falha ao ler o arquivo'});
+            fr.readAsDataURL(data instanceof Blob?data:new Blob([data]));})}:null};
+          </script>
+          <script>
+          const $ = s => document.querySelector(s);
+          const items = [];
+          const FC = s => (s.charCodeAt(0) | s.charCodeAt(1) << 8 | s.charCodeAt(2) << 16 | s.charCodeAt(3) << 24) >>> 0;
+
+          function c565(v){return [((v>>11&31)*255/31+.5)|0, ((v>>5&63)*255/63+.5)|0, ((v&31)*255/31+.5)|0];}
+
+          function alphaBlock(dv,p){
+            const a0=dv.getUint8(p), a1=dv.getUint8(p+1), t=[a0,a1];
+            if(a0>a1){for(let i=1;i<7;i++)t.push(((7-i)*a0+i*a1)/7|0);}
+            else{for(let i=1;i<5;i++)t.push(((5-i)*a0+i*a1)/5|0);t.push(0,255);}
+            const bits=dv.getUint32(p+2,true)+dv.getUint16(p+6,true)*4294967296, r=new Uint8Array(16);
+            for(let i=0;i<16;i++)r[i]=t[Math.floor(bits/2**(3*i))%8];
+            return r;
+          }
+
+          function decodeBlocks(dv,o,w,h,kind){
+            const out=new Uint8ClampedArray(w*h*4), bw=(w+3)>>2, bh=(h+3)>>2;
+            const size=(kind==='bc1'||kind==='bc4')?8:16, px=new Uint8Array(64);
+            for(let by=0;by<bh;by++)for(let bx=0;bx<bw;bx++){
+              const p=o+(by*bw+bx)*size;
+              if(p+size>dv.byteLength)throw new Error('O arquivo parece estar incompleto.');
+              if(kind==='bc4'||kind==='bc5'){
+                const r=alphaBlock(dv,p), g=kind==='bc5'?alphaBlock(dv,p+8):r;
+                for(let i=0;i<16;i++){px[i*4]=r[i];px[i*4+1]=g[i];px[i*4+2]=kind==='bc5'?0:r[i];px[i*4+3]=255;}
+              }else{
+                const cp=kind==='bc1'?p:p+8, c0=dv.getUint16(cp,true), c1=dv.getUint16(cp+2,true);
+                const a=c565(c0), b=c565(c1), four=kind!=='bc1'||c0>c1, pal=[a,b];
+                if(four){pal.push(a.map((v,i)=>((2*v+b[i])/3)|0),a.map((v,i)=>((v+2*b[i])/3)|0));}
+                else{pal.push(a.map((v,i)=>((v+b[i])>>1)),[0,0,0]);}
+                const bits=dv.getUint32(cp+4,true);
+                let al=null; if(kind==='bc3')al=alphaBlock(dv,p);
+                for(let i=0;i<16;i++){
+                  const idx=bits>>(2*i)&3, c=pal[idx];
+                  px[i*4]=c[0];px[i*4+1]=c[1];px[i*4+2]=c[2];
+                  let A=255;
+                  if(kind==='bc1'&&!four&&idx===3)A=0;
+                  else if(kind==='bc2'){const by2=dv.getUint8(p+(i>>1));A=(i&1?by2>>4:by2&15)*17;}
+                  else if(kind==='bc3')A=al[i];
+                  px[i*4+3]=A;
+                }
+              }
+              for(let y=0;y<4;y++){const yy=by*4+y;if(yy>=h)break;
+                for(let x=0;x<4;x++){const xx=bx*4+x;if(xx>=w)break;
+                  const s=(y*4+x)*4,d=(yy*w+xx)*4;
+                  out[d]=px[s];out[d+1]=px[s+1];out[d+2]=px[s+2];out[d+3]=px[s+3];}}
+            }
+            return out;
+          }
+
+          function decodeRaw(dv,o,w,h,bpp,masks,lum,alphaOnly){
+            const bytes=bpp>>3;
+            if(![1,2,3,4].includes(bytes))throw new Error('Profundidade de pixel não suportada ('+bpp+' bits).');
+            if(o+w*h*bytes>dv.byteLength)throw new Error('O arquivo parece estar incompleto.');
+            const info=m=>{if(!m)return null;let s=0;while(!((m>>>s)&1))s++;let n=0;while((m>>>(s+n))&1&&s+n<32)n++;return{m,s,n};};
+            const [R,G,B,A]=masks.map(info);
+            if(!R&&!G&&!B&&!A)throw new Error('Formato de pixel não suportado.');
+            const get=(v,c,d)=>c?Math.round(((v&c.m)>>>c.s)*255/(2**c.n-1)):d;
+            const out=new Uint8ClampedArray(w*h*4);
+            for(let i=0;i<w*h;i++){
+              const q=o+i*bytes;
+              const v=bytes===4?dv.getUint32(q,true):bytes===2?dv.getUint16(q,true):bytes===1?dv.getUint8(q):(dv.getUint8(q)|dv.getUint8(q+1)<<8|dv.getUint8(q+2)<<16);
+              const d=i*4;
+              if(alphaOnly){out[d]=out[d+1]=out[d+2]=255;out[d+3]=get(v,A,255);continue;}
+              const r=get(v,R,0);
+              out[d]=r;out[d+1]=(lum||(!G&&!B))?r:get(v,G,0);out[d+2]=(lum||(!G&&!B))?r:get(v,B,0);
+              out[d+3]=get(v,A,255);
+            }
+            return out;
+          }
+
+          function parseDDS(buf,layer){layer=layer||0;
+            const dv=new DataView(buf);
+            if(buf.byteLength<128||dv.getUint32(0,true)!==0x20534444)throw new Error('Este não é um arquivo DDS válido.');
+            const h=dv.getUint32(12,true), w=dv.getUint32(16,true);
+            if(!w||!h||w>16384||h>16384)throw new Error('Dimensões inválidas ('+w+' × '+h+').');
+            const pf=dv.getUint32(80,true), cc=dv.getUint32(84,true), bpp=dv.getUint32(88,true);
+            const masks=[92,96,100,104].map(o=>dv.getUint32(o,true));
+            const map={bc1:'BC1 (DXT1)',bc2:'BC2 (DXT3)',bc3:'BC3 (DXT5)',bc4:'BC4',bc5:'BC5'};
+            let off=128, kind=null, raw=null;
+            if(pf&4){
+              const t={[FC('DXT1')]:'bc1',[FC('DXT2')]:'bc2',[FC('DXT3')]:'bc2',[FC('DXT4')]:'bc3',[FC('DXT5')]:'bc3',[FC('ATI1')]:'bc4',[FC('BC4U')]:'bc4',[FC('ATI2')]:'bc5',[FC('BC5U')]:'bc5'};
+              if(cc===FC('DX10')){
+                const f=dv.getUint32(128,true); off=148;
+                const dx={71:'bc1',72:'bc1',74:'bc2',75:'bc2',77:'bc3',78:'bc3',80:'bc4',81:'bc4',83:'bc5',84:'bc5'};
+                if(dx[f])kind=dx[f];
+                else if(f===28||f===29)raw={bpp:32,masks:[0xFF,0xFF00,0xFF0000,0xFF000000]};
+                else if(f===87||f===91)raw={bpp:32,masks:[0xFF0000,0xFF00,0xFF,0xFF000000]};
+                else if(f===61)raw={bpp:8,masks:[0xFF,0,0,0],lum:true};
+                else throw new Error('Formato DXGI '+f+' (como BC6H/BC7) ainda não é suportado.');
+              }else if(t[cc])kind=t[cc];
+              else throw new Error('Compressão “'+String.fromCharCode(cc&255,cc>>8&255,cc>>16&255,cc>>>24)+'” não suportada.');
+            }else{
+              raw={bpp,masks,lum:!!(pf&0x20000),alphaOnly:!!(pf&2)&&!(pf&0x40)&&!(pf&0x20000)};
+            }
+            const mips=Math.max(1,dv.getUint32(28,true)), arr=((pf&4)&&cc===FC('DX10'))?Math.max(1,dv.getUint32(140,true)):1;
+            let stride=0;
+            for(let l=0,lw=w,lh=h;l<mips;l++,lw=Math.max(1,lw>>1),lh=Math.max(1,lh>>1))stride+=kind?(((lw+3)>>2)*((lh+3)>>2)*((kind==='bc1'||kind==='bc4')?8:16)):Math.ceil(raw.bpp*lw/8)*lh;
+            if(layer>=arr)throw new Error('camada inexistente no DDS.');
+            off+=layer*stride;
+            let rgba,label;
+            if(kind){rgba=decodeBlocks(dv,off,w,h,kind);label=map[kind];}
+            else{rgba=decodeRaw(dv,off,w,h,raw.bpp,raw.masks,raw.lum,raw.alphaOnly);label='Sem compressão, '+raw.bpp+' bits';}
+            return{w,h,rgba,label,arr,dxt1:kind==='bc1'};
+          }
+
+          function paint(it){
+            return;
+            if(!it.rgba)return;
+            const c=it.canvas, ctx=c.getContext('2d');
+            c.width=it.w;c.height=it.h;
+            let d=it.rgba;
+            if($('#opaque').checked){d=new Uint8ClampedArray(it.rgba);for(let i=3;i<d.length;i+=4)d[i]=255;}
+            ctx.putImageData(new ImageData(d,it.w,it.h),0,0);
+          }
+
+          async function pngBlob(it){
+            const d=await it.load(), c=document.createElement('canvas');c.width=d.w;c.height=d.h;
+            let px=d.rgba;
+            if($('#opaque').checked){px=new Uint8ClampedArray(px);for(let i=3;i<px.length;i+=4)px[i]=255;}
+            c.getContext('2d').putImageData(new ImageData(px,d.w,d.h),0,0);
+            return await new Promise(r=>c.toBlob(r,'image/png'));
+          }
+          async function saveZip(files,zn){
+            let dl=null;try{dl=await claude.use('downloads');}catch(e){}
+            if(dl){try{await dl.save({filename:zn,data:zip(files)});}catch(e){if(e&&e.code!=='declined')alert('Não foi possível salvar: '+(e.message||e.code));}}
+            else for(const f of files){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([f.data]));a.download=f.name.split('/').pop();document.body.appendChild(a);a.click();a.remove();}
+          }
+          async function savePNG(it){
+            const name=it.name.replace(IMG,'')+'.png';
+            const blob=await pngBlob(it);
+            let dl=null;
+            try{dl=await claude.use('downloads');}catch(e){}
+            if(dl){
+              try{await dl.save({filename:name,data:blob});}catch(e){if(e&&e.code!=='declined')alert('Não foi possível salvar: '+(e.message||e.code));}
+            }else{
+              const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
+            }
+          }
+
+          function encodeASTC(it,opaque){
+            const {w,h,rgba}=it, bw=(w+3)>>2, bh=(h+3)>>2;
+            const out=new Uint8Array(16+bw*bh*16);
+            out.set([0x13,0xAB,0xA1,0x5C,4,4,1,w&255,w>>8&255,w>>16&255,h&255,h>>8&255,h>>16&255,1,0,0]);
+            const put=(o,pos,n,v)=>{for(let k=0;k<n;k++)if(v>>k&1)out[o+((pos+k)>>3)]|=1<<((pos+k)&7);};
+            const px=new Float32Array(64), m=[0,0,0,0], q=[1,1,1,1];
+            let bo=16;
+            for(let by=0;by<bh;by++)for(let bx=0;bx<bw;bx++,bo+=16){
+              m[0]=m[1]=m[2]=m[3]=0;
+              for(let i=0;i<16;i++){
+                const x=Math.min(bx*4+(i&3),w-1), y=Math.min(by*4+(i>>2),h-1), s=(y*w+x)*4;
+                px[i*4]=rgba[s];px[i*4+1]=rgba[s+1];px[i*4+2]=rgba[s+2];px[i*4+3]=opaque?255:rgba[s+3];
+                for(let c=0;c<4;c++)m[c]+=px[i*4+c]/16;
+              }
+              const C=new Float32Array(16);
+              for(let i=0;i<16;i++)for(let a=0;a<4;a++)for(let b=0;b<4;b++)C[a*4+b]+=(px[i*4+a]-m[a])*(px[i*4+b]-m[b]);
+              let v=[1,1,1,1];
+              for(let k=0;k<4;k++){
+                const n=[0,0,0,0];
+                for(let a=0;a<4;a++)for(let b=0;b<4;b++)n[a]+=C[a*4+b]*v[b];
+                const len=Math.hypot(...n);
+                if(len<1e-6)break;
+                v=n.map(x=>x/len);
+              }
+              let tmin=1e9,tmax=-1e9;
+              for(let i=0;i<16;i++){let t=0;for(let c=0;c<4;c++)t+=(px[i*4+c]-m[c])*v[c];if(t<tmin)tmin=t;if(t>tmax)tmax=t;}
+              let e0=[0,1,2,3].map(c=>Math.max(0,Math.min(255,Math.round(m[c]+v[c]*tmin))));
+              let e1=[0,1,2,3].map(c=>Math.max(0,Math.min(255,Math.round(m[c]+v[c]*tmax))));
+              if(e1[0]+e1[1]+e1[2]<e0[0]+e0[1]+e0[2]){const t=e0;e0=e1;e1=t;}
+              const d=e1.map((x,c)=>x-e0[c]), dd=d[0]*d[0]+d[1]*d[1]+d[2]*d[2]+d[3]*d[3];
+              put(bo,0,11,0x42);      // bloco 4x4, pesos de 2 bits
+              put(bo,13,4,12);        // endpoints RGBA diretos
+              for(let c=0;c<4;c++){put(bo,17+(c*2)*8,8,e0[c]);put(bo,17+(c*2+1)*8,8,e1[c]);}
+              for(let i=0;i<16;i++){
+                let t=0;
+                if(dd>0){for(let c=0;c<4;c++)t+=(px[i*4+c]-e0[c])*d[c];t/=dd;}
+                const wgt=t<.164?0:t<.5?1:t<.836?2:3;
+                put(bo,127-i*2,1,wgt&1);put(bo,126-i*2,1,wgt>>1&1);
+              }
+            }
+            return out;
+          }
+
+          function crc32(u){
+            if(!crc32.t){crc32.t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;crc32.t.push(c>>>0);}}
+            let r=-1;for(let i=0;i<u.length;i++)r=crc32.t[(r^u[i])&255]^(r>>>8);
+            return (r^-1)>>>0;
+          }
+          function zip(files){
+            const enc=new TextEncoder(), parts=[], cd=[]; let off=0;
+            for(const f of files){
+              const n=enc.encode(f.name), crc=crc32(f.data), sz=f.data.length;
+              const lh=new DataView(new ArrayBuffer(30));
+              lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);lh.setUint16(12,0x21,true);
+              lh.setUint32(14,crc,true);lh.setUint32(18,sz,true);lh.setUint32(22,sz,true);lh.setUint16(26,n.length,true);
+              parts.push(lh.buffer,n,f.data);
+              const ch=new DataView(new ArrayBuffer(46));
+              ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);ch.setUint16(8,0x0800,true);ch.setUint16(14,0x21,true);
+              ch.setUint32(16,crc,true);ch.setUint32(20,sz,true);ch.setUint32(24,sz,true);ch.setUint16(28,n.length,true);ch.setUint32(42,off,true);
+              cd.push(ch.buffer,n);off+=30+n.length+sz;
+            }
+            let cs=0;for(const p of cd)cs+=p.byteLength||p.length;
+            const e=new DataView(new ArrayBuffer(22));
+            e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
+            return new Blob([...parts,...cd,e.buffer],{type:'application/zip'});
+          }
+          async function saveAST(its,btn){
+            const old=btn.textContent;btn.disabled=true;btn.textContent='Convertendo…';
+            try{
+              const ext=$('#ext').value, opq=$('#opaque').checked, files=[];
+              for(const it of its){
+                btn.textContent='Convertendo '+(files.length+1)+'/'+its.length+'…';
+                await new Promise(r=>setTimeout(r,15));
+                files.push({name:(it.path||it.name).replace(IMG,'')+'.ast',data:await buildAst(it,SC(),FL())});
+                setProg(files.length,its.length,'Convertendo para AST');
+              }
+              let dl=null;try{dl=await claude.use('downloads');}catch(e){}
+              if(dl){
+                const zn=its.length===1?files[0].name.split('/').pop().replace(/\.[^.]+$/,'')+'.zip':'texturas-ast.zip';
+                try{await dl.save({filename:zn,data:zip(files)});}catch(e){if(e&&e.code!=='declined')alert('Não foi possível salvar: '+(e.message||e.code));}
+              }else{
+                for(const f of files){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([f.data]));a.download=f.name.split('/').pop();document.body.appendChild(a);a.click();a.remove();}
+              }
+            }catch(e){alert('Falha ao converter: '+(e.message||e));}
+            btn.disabled=false;btn.textContent=old;
+          }
+
+          function addCard(file,res,error,lazy){
+            const card=document.createElement('div');card.className='card';
+            if(error){
+              const e=document.createElement('div');e.className='err';
+              e.textContent=(file.path||file.name)+': '+error;card.appendChild(e);
+              $('#list').prepend(card);$('#fl').open=true;return;
+            }
+            const it={name:file.name,path:file.path||file.name,w:res.w,h:res.h,rgba:lazy?null:res.rgba,canvas:document.createElement('canvas')};
+            it.load=lazy||(async()=>it);it.z=curZip;it.raw=file.raw;
+            const pic=document.createElement('div');pic.className='pic';pic.appendChild(it.canvas);
+            const meta=document.createElement('div');meta.className='meta';
+            const info=document.createElement('div');
+            const b=document.createElement('b');b.textContent=(file.path||file.name).replace(IMG,'')+'.png';
+            const s=document.createElement('small');s.textContent=res.w+' × '+res.h+' px · '+res.label;
+            info.append(b,s);
+            const btn=document.createElement('button');btn.textContent='Baixar PNG';
+            btn.onclick=()=>savePNG(it);
+            const bAst=document.createElement('button');bAst.className='ghost';bAst.textContent='Baixar AST';
+            bAst.onclick=()=>saveAST([it],bAst);
+            const btns=document.createElement('div');btns.className='btns';btns.append(btn,bAst);
+            meta.append(info,btns);card.append(meta);
+            $('#list').prepend(card);
+            items.push(it);
+            $('#cnt').textContent=items.length;
+            $('#bar').hidden=false;
+          }
+
+          async function readZip(buf){
+            const dv=new DataView(buf),u=new Uint8Array(buf);
+            let e=-1;
+            for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-65557);i--)if(dv.getUint32(i,true)===0x06054b50){e=i;break;}
+            if(e<0)throw new Error('Este não é um arquivo .zip válido.');
+            const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out=[];
+            for(let k=0;k<n;k++){
+              if(dv.getUint32(p,true)!==0x02014b50)throw new Error('Índice do .zip danificado.');
+              const nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true);
+              const en={flags:dv.getUint16(p+8,true),method:dv.getUint16(p+10,true),csz:dv.getUint32(p+20,true),crc:dv.getUint32(p+16,true),usz:dv.getUint32(p+24,true),lo:dv.getUint32(p+42,true),name:new TextDecoder().decode(u.subarray(p+46,p+46+nl))};
+              if(en.csz===0xFFFFFFFF||en.lo===0xFFFFFFFF)throw new Error('.zip em formato ZIP64 ainda não é suportado.');
+              out.push(en);p+=46+nl+xl+cl;
+            }
+            return out;
+          }
+          async function extractEntry(buf,en){
+            if(en.flags&1)throw new Error('arquivo protegido por senha.');
+            const dv=new DataView(buf),s=en.lo+30+dv.getUint16(en.lo+26,true)+dv.getUint16(en.lo+28,true);
+            const raw=new Uint8Array(buf,s,en.csz);
+            if(en.method===0)return raw.slice().buffer;
+            if(en.method===8){
+              if(typeof DecompressionStream==='undefined')throw new Error('este navegador não consegue descompactar .zip.');
+              return await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+            }
+            throw new Error('método de compressão do .zip não suportado.');
+          }
+          async function handleZip(f){
+            const st=$('#status');
+            try{
+              const buf=await f.arrayBuffer();
+              const all=await readZip(buf);
+              const ents=all.filter(e=>IMG.test(e.name)&&!e.name.endsWith('/')&&!/(^|\/)__MACOSX\//.test(e.name));
+              if(!ents.length){addCard({name:f.name},null,'nenhum arquivo .dds encontrado dentro do .zip.');st.textContent='';return;}
+              let ok=0,bad=0;const z={name:f.name,buf,all};curZip=z;
+              for(let i=0;i<ents.length;i++){
+                const en=ents[i];
+                st.textContent=f.name+': lendo '+(i+1)+' de '+ents.length+'…';
+                await new Promise(r=>setTimeout(r,0));
+                const file={name:en.name.split('/').pop(),path:en.name,raw:()=>extractEntry(buf,en)};
+                const load=async()=>parseAny(await extractEntry(buf,en),en.name);
+                try{addCard(file,await load(),null,load);ok++;}
+                catch(e){addCard(file,null,e.message||'falha ao converter.');bad++;}
+                setProg(i+1,ents.length,'Lendo '+f.name);
+              }
+              st.textContent=f.name+': '+ok+' textura(s) pronta(s)'+(bad?', '+bad+' com erro':'')+'.';
+              curZip=null;addModCard(z,ok);
+            }catch(e){addCard({name:f.name},null,e.message||'não foi possível abrir o .zip.');st.textContent='';}
+          }
+          let curZip=null;
+          function rawBytes(buf,en){
+            const dv=new DataView(buf),s=en.lo+30+dv.getUint16(en.lo+26,true)+dv.getUint16(en.lo+28,true);
+            return new Uint8Array(buf,s,en.csz);
+          }
+          function zipRaw(files){
+            const enc=new TextEncoder(), parts=[], cd=[]; let off=0;
+            for(const f of files){
+              const n=enc.encode(f.name), sz=f.data.length;
+              const lh=new DataView(new ArrayBuffer(30));
+              lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);lh.setUint16(8,f.method,true);lh.setUint16(12,0x21,true);
+              lh.setUint32(14,f.crc,true);lh.setUint32(18,sz,true);lh.setUint32(22,f.usz,true);lh.setUint16(26,n.length,true);
+              parts.push(lh.buffer,n,f.data);
+              const ch=new DataView(new ArrayBuffer(46));
+              ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);ch.setUint16(8,0x0800,true);ch.setUint16(10,f.method,true);ch.setUint16(14,0x21,true);
+              ch.setUint32(16,f.crc,true);ch.setUint32(20,sz,true);ch.setUint32(24,f.usz,true);ch.setUint16(28,n.length,true);ch.setUint32(42,off,true);
+              cd.push(ch.buffer,n);off+=30+n.length+sz;
+            }
+            let cs=0;for(const p of cd)cs+=p.byteLength||p.length;
+            const e=new DataView(new ArrayBuffer(22));
+            e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
+            return new Blob([...parts,...cd,e.buffer],{type:'application/zip'});
+          }
+          async function saveBlob(blob,filename){
+            let dl=null;try{dl=await claude.use('downloads');}catch(e){}
+            if(dl){try{await dl.save({filename,data:blob});}catch(e){if(e&&e.code!=='declined')alert('Não foi possível salvar: '+(e.message||e.code));}}
+            else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();}
+          }
+          async function packMod(z,fmt,btn){
+            const old=btn.textContent;btn.disabled=true;
+            try{
+              const refs=$('#refs').checked, ext=fmt==='png'?'png':$('#ext').value, opq=$('#opaque').checked;
+              const map=new Map(items.filter(it=>it.z===z).map(it=>[it.path,it]));
+              const out=[], keep=new Set(), texts=new Map();
+              const bn=p=>p.split('/').pop().toLowerCase();
+              for(const en of z.all){
+                if(!/\.xml$/i.test(en.name))continue;
+                try{
+                  const t=new TextDecoder().decode(await extractEntry(z.buf,en));texts.set(en.name,t);
+                  for(const m of t.matchAll(/<(iconFilename|image)\b[^>]*>\s*([^<]*?)\s*<\/\1>/gi))if(/\.dds$/i.test(m[2]))keep.add(bn(m[2]));
+                  for(const m of t.matchAll(/\b(?:iconFilename|imageFilename|filenameIcon|icon|image)\s*=\s*"([^"]+\.dds)"/gi))keep.add(bn(m[1]));
+                }catch(e){}
+              }
+              const isIcon=n=>$('#keepicon').checked&&(keep.has(bn(n))||/^(icon|store)/i.test(bn(n)));
+              const conv=new Set([...map.keys()].filter(n=>!isIcon(n)).map(bn));
+              for(let i=0;i<z.all.length;i++){
+                const en=z.all[i];
+                if(en.name.endsWith('/'))continue;
+                const it=map.get(en.name);
+                if(it&&!isIcon(en.name)){
+                  btn.textContent='Convertendo '+(i+1)+'/'+z.all.length+'…';
+                  await new Promise(r=>setTimeout(r,0));
+                  const data=fmt==='png'?new Uint8Array(await (await pngBlob(it)).arrayBuffer()):await buildAst(it,SC(),FL());
+                  out.push({name:en.name.replace(IMG,'.'+ext),data,method:0,crc:crc32(data),usz:data.length});
+                  setProg(i+1,z.all.length,'Gerando o mod');
+                  continue;
+                }
+                if(refs&&/\.(xml|i3d|lua|txt)$/i.test(en.name)){
+                  const txt=texts.get(en.name)??new TextDecoder().decode(await extractEntry(z.buf,en));
+                  const t2=txt.replace(/([^"'<>\s=]*)\.dds\b/gi,(m,p)=>(/^\$/.test(p)||!conv.has(bn(p+'.dds')))?m:p+'.'+ext);
+                  if(t2!==txt){const d=new TextEncoder().encode(t2);out.push({name:en.name,data:d,method:0,crc:crc32(d),usz:d.length});continue;}
+                }
+                out.push({name:en.name,data:rawBytes(z.buf,en),method:en.method,crc:en.crc,usz:en.usz});
+              }
+              setProg(1,1,'Mod pronto');
+              await saveBlob(zipRaw(out),z.name.replace(/\.zip$/i,'')+'-convertido-'+fmt+'.zip');
+            }catch(e){alert('Falha ao gerar o mod: '+(e.message||e));}
+            btn.disabled=false;btn.textContent=old;
+          }
+          function addModCard(z,ok){
+            if(!ok)return;
+            const card=document.createElement('div');card.className='card';
+            const meta=document.createElement('div');meta.className='meta';
+            const info=document.createElement('div');
+            const b=document.createElement('b');b.textContent='Mod: '+z.name;
+            const s=document.createElement('small');s.textContent=ok+' textura(s) DDS dentro do mod';
+            info.append(b,s);
+            const btns=document.createElement('div');btns.className='btns';
+            const bp=document.createElement('button');bp.textContent='Baixar mod com PNG';
+            const ba=document.createElement('button');ba.textContent='Baixar mod com AST';
+            bp.onclick=()=>packMod(z,'png',bp);ba.onclick=()=>packMod(z,'ast',ba);
+            btns.append(ba,bp);meta.append(info,btns);card.append(meta);
+            $('#modbar').prepend(card);
+          }
+          async function handle(files){
+            let k=0;
+            for(const f of files){
+              if(/\.zip$/i.test(f.name)){await handleZip(f);continue;}
+              if(!IMG.test(f.name)){if(!f.webkitRelativePath)addCard(f,null,'só arquivos .dds, .png, .jpg e .zip são aceitos.');continue;}
+              try{const buf=await f.arrayBuffer();addCard({name:f.name,path:f.webkitRelativePath||f.name,raw:async()=>buf},await parseAny(buf,f.name));}
+              catch(e){addCard(f,null,e.message||'falha ao converter.');}
+              setProg(++k,files.length,'Lendo arquivos');
+            }
+          }
+
+          $('#file').addEventListener('change',e=>{handle([...e.target.files]);e.target.value='';});
+          const drop=$('#drop');
+          ['dragenter','dragover'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over');}));
+          ['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over');}));
+          drop.addEventListener('drop',e=>handle([...e.dataTransfer.files]));
+          const TXT=/\.(xml|i3d|lua|txt|l10n|cfg|ini|json|md|html|css|js)$/i;
+          let ez=null,cur=null;
+          const fmtSize=n=>n>1048576?(n/1048576).toFixed(1)+' MB':n>1024?Math.round(n/1024)+' KB':n+' B';
+          async function openMod(f){
+            try{
+              const buf=await f.arrayBuffer();
+              const all=(await readZip(buf)).filter(e=>!e.name.endsWith('/'));
+              ez={name:f.name,buf,list:all.map(en=>({name:en.name,en,data:null,del:false}))};
+              cur=null;$('#ed').hidden=true;
+              let info=f.name+': '+all.length+' arquivo(s)';
+              const md=ez.list.find(e=>/^modDesc\.xml$/i.test(e.name));
+              if(md){
+                const t=new TextDecoder().decode(await extractEntry(buf,md.en));
+                const dv=(t.match(/descVersion\s*=\s*"([^"]*)"/)||[])[1], ver=(t.match(/<version>\s*([^<]*?)\s*<\/version>/)||[])[1], ti=(t.match(/<title>[\s\S]*?<en>\s*([^<]*?)\s*<\/en>/)||[])[1];
+                const parts=[ti,ver&&'versão '+ver,dv&&'descVersion '+dv].filter(Boolean);
+                if(parts.length)info+=' · '+parts.join(' · ');
+              }else info+=' · modDesc.xml não encontrado';
+              $('#modinfo').textContent=info;$('#filt').hidden=false;$('#ebar').hidden=false;renderFiles();
+            }catch(e){$('#modinfo').textContent='Não foi possível abrir: '+(e.message||e);}
+          }
+          function renderFiles(){
+            const box=$('#flist');box.textContent='';
+            if(!ez)return;
+            const q=$('#filt').value.trim().toLowerCase();
+            const rows=ez.list.filter(e=>!q||e.name.toLowerCase().includes(q));
+            for(const e of rows.slice(0,300)){
+              const row=document.createElement('div');row.className='card';
+              const meta=document.createElement('div');meta.className='meta';
+              const info=document.createElement('div');
+              const b=document.createElement('b');b.textContent=e.name;if(e.del)b.style.textDecoration='line-through';
+              const s=document.createElement('small');s.textContent=fmtSize(e.data?e.data.length:e.en.usz)+(e.del?' · será excluído':e.data?' · alterado':'');
+              info.append(b,s);
+              const btns=document.createElement('div');btns.className='btns';
+              if(TXT.test(e.name)&&!e.del){const be=document.createElement('button');be.textContent='Editar';be.onclick=()=>editEntry(e);btns.append(be);}
+              if(/\.i3d$/i.test(e.name)&&!e.del){const bi=document.createElement('button');bi.textContent='I3D';bi.onclick=()=>openEntryI3D(e);btns.append(bi);}
+              const br=document.createElement('button');br.className='ghost';br.textContent='Substituir';br.onclick=()=>replaceEntry(e);
+              const bd=document.createElement('button');bd.className='ghost';bd.textContent=e.del?'Desfazer':'Excluir';bd.onclick=()=>{e.del=!e.del;renderFiles();};
+              btns.append(br,bd);meta.append(info,btns);row.append(meta);box.append(row);
+            }
+            if(rows.length>300){const p=document.createElement('p');p.className='hint';p.textContent='Mostrando 300 de '+rows.length+' arquivos. Use o filtro para achar os demais.';box.append(p);}
+          }
+          async function editEntry(e){
+            try{
+              const u=e.data||new Uint8Array(await extractEntry(ez.buf,e.en));
+              if(u.length>3*1048576){alert('Arquivo grande demais para editar aqui (limite de 3 MB).');return;}
+              cur=e;$('#edname').textContent=e.name;$('#edtext').value=new TextDecoder().decode(u);
+              $('#ed').hidden=false;$('#ed').scrollIntoView({behavior:'smooth'});
+            }catch(err){alert('Não foi possível abrir: '+(err.message||err));}
+          }
+          function replaceEntry(e){
+            const i=document.createElement('input');i.type='file';
+            i.onchange=async()=>{if(!i.files[0])return;e.data=new Uint8Array(await i.files[0].arrayBuffer());e.del=false;renderFiles();};
+            i.click();
+          }
+          $('#edsave').onclick=()=>{
+            if(!cur)return;
+            cur.data=new TextEncoder().encode($('#edtext').value);renderFiles();
+            $('#edsave').textContent='Salvo ✔';setTimeout(()=>$('#edsave').textContent='Salvar',1200);
+          };
+          $('#edclose').onclick=()=>{cur=null;$('#ed').hidden=true;};
+          $('#edrepl').onclick=()=>{
+            const a=$('#fnd').value;if(!a)return;
+            const t=$('#edtext').value,n=t.split(a).length-1;
+            $('#edtext').value=t.split(a).join($('#rpl').value);
+            $('#edrepl').textContent=n+' trocado(s)';setTimeout(()=>$('#edrepl').textContent='Trocar tudo',1500);
+          };
+          $('#filt').addEventListener('input',renderFiles);
+          $('#fileE').addEventListener('change',e=>{if(e.target.files[0])openMod(e.target.files[0]);e.target.value='';});
+          const dropE=$('#dropE');
+          ['dragenter','dragover'].forEach(t=>dropE.addEventListener(t,e=>{e.preventDefault();dropE.classList.add('over');}));
+          ['dragleave','drop'].forEach(t=>dropE.addEventListener(t,e=>{e.preventDefault();dropE.classList.remove('over');}));
+          dropE.addEventListener('drop',e=>{if(e.dataTransfer.files[0])openMod(e.dataTransfer.files[0]);});
+          $('#dlmod').onclick=async e=>{
+            if(!ez)return;
+            const btn=e.currentTarget,old=btn.textContent;btn.disabled=true;btn.textContent='Gerando…';
+            try{
+              const out=[];
+              for(const x of ez.list){
+                if(x.del)continue;
+                if(x.data)out.push({name:x.name,data:x.data,method:0,crc:crc32(x.data),usz:x.data.length});
+                else out.push({name:x.name,data:rawBytes(ez.buf,x.en),method:x.en.method,crc:x.en.crc,usz:x.en.usz});
+              }
+              await saveBlob(zipRaw(out),ez.name.replace(/\.zip$/i,'')+'-editado.zip');
+            }catch(err){alert('Falha ao gerar o mod: '+(err.message||err));}
+            btn.disabled=false;btn.textContent=old;
+          };
+          const TABS={conv:['viewConv','tabC'],edit:['viewEdit','tabE'],i3d:['viewI3d','tabI'],make:['viewMake','tabM'],model:['viewModel','tabD']};
+          const setTab=n=>{for(const k in TABS){$('#'+TABS[k][0]).hidden=k!==n;$('#'+TABS[k][1]).setAttribute('aria-pressed',String(k===n));}};
+          $('#tabC').onclick=()=>setTab('conv');$('#tabE').onclick=()=>setTab('edit');$('#tabI').onclick=()=>setTab('i3d');$('#tabM').onclick=()=>setTab('make');$('#tabD').onclick=()=>{setTab('model');renderModelUI();drawModel();};
+          let xd=null,xsel=null,xent=null,xfile='';
+          const nextId=()=>Math.max(0,...[...xd.querySelectorAll('[nodeId]')].map(n=>+n.getAttribute('nodeId')||0))+1;
+          const ser=()=>'<?xml version="1.0" encoding="utf-8"?>\n'+new XMLSerializer().serializeToString(xd);
+          function openI3D(text,name,entry){
+            const d=new DOMParser().parseFromString(text,'application/xml');
+            if(d.querySelector('parsererror')){alert('Este arquivo não é um XML válido.');return;}
+            xd=d;xent=entry;xfile=name;xsel=null;
+            $('#i3dcard').hidden=false;$('#i3dname').textContent=name;setTab('i3d');renderI3D();
+          }
+          async function openEntryI3D(e){
+            try{const u=e.data||new Uint8Array(await extractEntry(ez.buf,e.en));openI3D(new TextDecoder().decode(u),e.name,e);}
+            catch(err){alert('Não foi possível abrir: '+(err.message||err));}
+          }
+          function renderI3D(){
+            const sc=xd.querySelector('Scene'),box=$('#tree');box.textContent='';
+            let n=0;
+            const walk=(el,dep)=>{for(const ch of el.children){
+              if(++n>2000)return;
+              const r=document.createElement('button');r.className='node'+(ch===xsel?' sel':'');
+              r.style.paddingLeft=(10+dep*14)+'px';
+              r.textContent=ch.tagName+' · '+(ch.getAttribute('name')||'(sem nome)');
+              r.onclick=()=>{xsel=ch;renderI3D();};
+              box.append(r);walk(ch,dep+1);
+            }};
+            if(sc)walk(sc,0);else box.textContent='Cena (Scene) não encontrada neste arquivo.';
+            $('#i3dstat').textContent=(sc?sc.querySelectorAll('*').length:0)+' nó(s) · '+xd.querySelectorAll('Materials > Material').length+' material(is)'+(n>2000?' · mostrando 2000':'');
+            renderProps();renderI3DFiles();
+          }
+          function renderProps(){
+            const p=$('#props');p.textContent='';
+            if(!xsel){p.textContent='Toque num item da árvore para editar.';return;}
+            const h=document.createElement('b');h.textContent=xsel.tagName;p.append(h);
+            for(const a of [...xsel.attributes]){
+              const l=document.createElement('label');l.className='prop';
+              const s=document.createElement('span');s.textContent=a.name;
+              const i=document.createElement('input');i.value=a.value;
+              i.onchange=()=>{xsel.setAttribute(a.name,i.value);renderI3D();};
+              l.append(s,i);p.append(l);
+            }
+            const l=document.createElement('label');l.className='prop';
+            const k=document.createElement('input');k.placeholder='novo atributo';
+            const v=document.createElement('input');v.placeholder='valor';
+            v.onchange=()=>{if(k.value.trim()){xsel.setAttribute(k.value.trim(),v.value);renderI3D();}};
+            l.append(k,v);p.append(l);
+            const bar=document.createElement('div');bar.className='btns';
+            const mk=(t,f,g)=>{const b=document.createElement('button');b.textContent=t;if(g)b.className='ghost';b.onclick=f;bar.append(b);};
+            mk('Novo filho',()=>{const c=xd.createElement('TransformGroup');c.setAttribute('name','novo');c.setAttribute('nodeId',String(nextId()));xsel.append(c);xsel=c;renderI3D();});
+            if(xsel.tagName!=='Scene'){
+              mk('Duplicar',()=>{const c=xsel.cloneNode(true);let id=nextId();for(const n of [c,...c.querySelectorAll('[nodeId]')])if(n.hasAttribute('nodeId'))n.setAttribute('nodeId',String(id++));if(c.hasAttribute('name'))c.setAttribute('name',c.getAttribute('name')+'_copia');xsel.after(c);xsel=c;renderI3D();},1);
+              mk('↑',()=>{const q=xsel.previousElementSibling;if(q){xsel.parentNode.insertBefore(xsel,q);renderI3D();}},1);
+              mk('↓',()=>{const q=xsel.nextElementSibling;if(q){q.after(xsel);renderI3D();}},1);
+              mk('Excluir',()=>{const pr=xsel.parentNode;xsel.remove();xsel=pr.tagName==='Scene'?null:pr;renderI3D();},1);
+            }
+            p.append(bar);
+          }
+          function renderI3DFiles(){
+            const b=$('#i3dfiles');b.textContent='';
+            for(const f of xd.querySelectorAll('Files > File')){
+              const l=document.createElement('label');l.className='prop';
+              const s=document.createElement('span');s.textContent='ID '+f.getAttribute('fileId');
+              const i=document.createElement('input');i.value=f.getAttribute('fileName')||'';i.onchange=()=>f.setAttribute('fileName',i.value);
+              l.append(s,i);b.append(l);
+            }
+            if(!b.children.length)b.textContent='Nenhum arquivo listado.';
+          }
+          $('#i3dext').onclick=()=>{
+            if(!xd)return;const ext=$('#ext').value;let n=0;
+            for(const f of xd.querySelectorAll('Files > File')){
+              const v=f.getAttribute('fileName')||'';
+              if(/\.dds$/i.test(v)&&!/^\$/.test(v)){f.setAttribute('fileName',v.replace(IMG,'.'+ext));n++;}
+            }
+            renderI3DFiles();$('#i3dext').textContent=n+' trocado(s)';setTimeout(()=>$('#i3dext').textContent='Trocar .dds pela extensão do AST',1500);
+          };
+          $('#i3dapply').onclick=()=>{
+            if(!xd)return;
+            if(!xent){alert('Para aplicar no mod, abra o .i3d pelo botão “I3D” na aba Editar mod.');return;}
+            xent.data=new TextEncoder().encode(ser());xent.del=false;renderFiles();setTab('edit');
+          };
+          $('#i3ddl').onclick=()=>{if(xd)saveBlob(new Blob([ser()],{type:'text/xml'}),xfile.split('/').pop().replace(/\.i3d$/i,'')+'.xml');};
+          $('#fileI').addEventListener('change',async e=>{const f=e.target.files[0];e.target.value='';if(f)openI3D(await f.text(),f.name,null);});
+          function astc6(p,w,h){
+            const bw=Math.ceil(w/6),bh=Math.ceil(h/6),out=new Uint8Array(bw*bh*16);
+            const px=new Float32Array(144),t=new Float32Array(36);
+            const put=(o,pos,n,v)=>{for(let k=0;k<n;k++)if(v>>k&1)out[o+((pos+k)>>3)]|=1<<((pos+k)&7);};
+            for(let by=0;by<bh;by++)for(let bx=0;bx<bw;bx++){
+              const o=(by*bw+bx)*16;let alpha=false;
+              for(let i=0;i<36;i++){
+                const x=Math.min(bx*6+i%6,w-1),y=Math.min(by*6+((i/6)|0),h-1),s=(y*w+x)*4;
+                px[i*4]=p[s];px[i*4+1]=p[s+1];px[i*4+2]=p[s+2];px[i*4+3]=p[s+3];
+                if(p[s+3]<255)alpha=true;
+              }
+              const nc=alpha?4:3,m=[0,0,0,0];
+              for(let i=0;i<36;i++)for(let c=0;c<nc;c++)m[c]+=px[i*4+c]/36;
+              const C=new Float32Array(16);
+              for(let i=0;i<36;i++)for(let a=0;a<nc;a++)for(let b=0;b<nc;b++)C[a*4+b]+=(px[i*4+a]-m[a])*(px[i*4+b]-m[b]);
+              let v=[1,1,1,1];
+              for(let k=0;k<5;k++){
+                const n=[0,0,0,0];
+                for(let a=0;a<nc;a++)for(let b=0;b<nc;b++)n[a]+=C[a*4+b]*v[b];
+                const len=Math.hypot(...n);if(len<1e-6)break;v=n.map(x=>x/len);
+              }
+              let lo=1e9,hi=-1e9;
+              for(let i=0;i<36;i++){let d=0;for(let c=0;c<nc;c++)d+=(px[i*4+c]-m[c])*v[c];if(d<lo)lo=d;if(d>hi)hi=d;}
+              const cl=x=>Math.max(0,Math.min(255,Math.round(x)));
+              let e0=[0,1,2,3].map(c=>c<nc?cl(m[c]+v[c]*lo):255),e1=[0,1,2,3].map(c=>c<nc?cl(m[c]+v[c]*hi):255);
+              if(e1[0]+e1[1]+e1[2]<e0[0]+e0[1]+e0[2]){const q=e0;e0=e1;e1=q;}
+              const d=[0,1,2,3].map(c=>c<nc?e1[c]-e0[c]:0),dd=d[0]*d[0]+d[1]*d[1]+d[2]*d[2]+d[3]*d[3];
+              for(let i=0;i<36;i++){let s=0;if(dd>0){for(let c=0;c<nc;c++)s+=(px[i*4+c]-e0[c])*d[c];s/=dd;}t[i]=s<0?0:s>1?1:s;}
+              const N=alpha?4:5;
+              put(o,0,11,alpha?0x42:0xE2);put(o,13,4,alpha?12:8);
+              for(let c=0;c<nc;c++){put(o,17+c*16,8,e0[c]);put(o,25+c*16,8,e1[c]);}
+              for(let gj=0;gj<N;gj++)for(let gi=0;gi<N;gi++){
+                const x=gi*5/(N-1),y=gj*5/(N-1),x0=Math.floor(x),y0=Math.floor(y),x1=Math.min(5,x0+1),y1=Math.min(5,y0+1),fx=x-x0,fy=y-y0;
+                const tt=(t[y0*6+x0]*(1-fx)+t[y0*6+x1]*fx)*(1-fy)+(t[y1*6+x0]*(1-fx)+t[y1*6+x1]*fx)*fy;
+                const q=tt<.164?0:tt<.5?1:tt<.836?2:3,k=gj*N+gi;
+                put(o,127-2*k,1,q&1);put(o,126-2*k,1,q>>1&1);
+              }
+            }
+            return out;
+          }
+
+          const IMG=/\.(dds|png|jpe?g)$/i;
+          const SC=()=>+$('#scale').value, FL=()=>$('#flip').checked;
+          async function parseAny(buf,name){
+            if(/\.dds$/i.test(name)||(buf.byteLength>4&&new DataView(buf).getUint32(0,true)===0x20534444))return Object.assign(parseDDS(buf,0),{dds:true});
+            const bmp=await createImageBitmap(new Blob([buf]));
+            const c=document.createElement('canvas');c.width=bmp.width;c.height=bmp.height;
+            const x=c.getContext('2d');x.drawImage(bmp,0,0);
+            return{w:c.width,h:c.height,rgba:x.getImageData(0,0,c.width,c.height).data,label:'Imagem '+(/png$/i.test(name)?'PNG':'JPG'),arr:1,dxt1:false,dds:false};
+          }
+          function resizeRGBA(p,w,h,nw,nh){
+            if(w===nw&&h===nh)return p;
+            if(typeof document==='undefined'){
+              const o=new Uint8ClampedArray(nw*nh*4),sx=w/nw,sy=h/nh;
+              for(let y=0;y<nh;y++)for(let x=0;x<nw;x++){
+                const x0=Math.floor(x*sx),x1=Math.max(x0+1,Math.min(w,Math.ceil((x+1)*sx))),y0=Math.floor(y*sy),y1=Math.max(y0+1,Math.min(h,Math.ceil((y+1)*sy)));
+                const a=[0,0,0,0];let n=0;
+                for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++){const s=(yy*w+xx)*4;a[0]+=p[s];a[1]+=p[s+1];a[2]+=p[s+2];a[3]+=p[s+3];n++;}
+                for(let c=0;c<4;c++)o[(y*nw+x)*4+c]=a[c]/n;
+              }
+              return o;
+            }
+            const a=document.createElement('canvas');a.width=w;a.height=h;
+            a.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p),w,h),0,0);
+            const b=document.createElement('canvas');b.width=nw;b.height=nh;
+            const c=b.getContext('2d');c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high';c.drawImage(a,0,0,nw,nh);
+            return c.getImageData(0,0,nw,nh).data;
+          }
+          function flipV(p,w,h){
+            const o=new Uint8ClampedArray(p.length),r=w*4;
+            for(let y=0;y<h;y++)o.set(p.subarray(y*r,(y+1)*r),(h-1-y)*r);
+            return o;
+          }
+          const TERRAIN=['asphalt','animalmud','cobble','concrete','dirt','forestground','grass','gravel','meadow','mud','pebble','rock','roughmud','sand','stone'];
+          const catBytes=a=>{let n=0;for(const x of a)n+=x.length;const o=new Uint8Array(n);let k=0;for(const x of a){o.set(x,k);k+=x.length;}return o;};
+          function astHeader(w,h,type,mips,cnt,p5,p6,p7){
+            const b=new DataView(new ArrayBuffer(60));
+            [0x44325347,4,p6,w,h,1,type,mips-1,cnt,2,p5,0,p5===5?1:0,p5===5?1:0,p7].forEach((v,i)=>b.setUint32(i*4,v>>>0,true));
+            return new Uint8Array(b.buffer);
+          }
+          async function makeAst(nm,layers,isDds,dxt1,scale,flip){
+            const n=layers.length,L0=layers[0];
+            if(nm.includes('detail')&&isDds){
+              const cnt=Math.max(1,n-1),raw=new Uint8Array(cnt*4);
+              for(let i=0;i<cnt;i++){
+                const q=layers[i].rgba,N=q.length/4;let r=0,g=0,b=0;
+                for(let k=0;k<q.length;k+=4){r+=q[k];g+=q[k+1];b+=q[k+2];}
+                raw.set([Math.floor(r/N),Math.floor(g/N),Math.floor(b/N),255],i*4);
+              }
+              const z=new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+              return catBytes([astHeader(cnt,1,4,1,1,5,z.length,raw.length),z]);
+            }
+            const hasA=l=>{const q=l.rgba;for(let k=3;k<q.length;k+=4)if(q[k]<255)return true;return false;};
+            let W,H,type;
+            if(n>1){
+              if(nm.includes('building')){W=Math.max(1,Math.round(L0.w*scale));H=Math.max(1,Math.round(L0.h*scale));type=3;}
+              else{W=H=512;type=(nm.includes('ground')&&nm.includes('diffuse')&&!nm.includes('groundlayer'))?3:4;}
+            }else if(nm.includes('_distance')){W=H=128;type=3;}
+            else if(!nm.includes('foliage')&&TERRAIN.some(t=>nm.includes(t))){W=H=256;type=4;}
+            else{
+              const f=nm.includes('_specular')?0.5*scale:scale;
+              W=Math.max(1,Math.round(L0.w*f));H=Math.max(1,Math.round(L0.h*f));
+              type=(isDds&&dxt1)?3:(hasA(L0)?4:3);
+            }
+            const parts=[];let mips=0;
+            for(const L of layers){
+              let cur=resizeRGBA(L.rgba,L.w,L.h,W,H);
+              if(flip)cur=flipV(cur,W,H);
+              let w=W,h=H;mips=0;
+              for(;;){
+                parts.push(astc6(cur,w,h));mips++;
+                if(w<=4||h<=4)break;
+                const nw=Math.max(1,w>>1),nh=Math.max(1,h>>1);
+                cur=resizeRGBA(cur,w,h,nw,nh);w=nw;h=nh;
+              }
+            }
+            const data=catBytes(parts);
+            return catBytes([astHeader(W,H,type,mips,n,24,data.length,data.length),data]);
+          }
+          async function buildAst(it,scale,flip){
+            const buf=await it.raw(),isDds=buf.byteLength>4&&new DataView(buf).getUint32(0,true)===0x20534444;
+            const layers=[];let dxt1=false;
+            if(isDds){const f0=parseDDS(buf,0);dxt1=f0.dxt1;layers.push(f0);for(let i=1;i<f0.arr;i++)layers.push(parseDDS(buf,i));}
+            else layers.push(await parseAny(buf,it.name));
+            return makeAst(it.name.toLowerCase(),layers,isDds,dxt1,scale,flip);
+          }
+          /* ---- criar mod ---- */
+          const mk={files:[]};
+          function renderMk(){
+            const b=$('#mkList');b.textContent='';
+            mk.files.forEach((f,i)=>{
+              const r=document.createElement('div');r.className='card';
+              const m=document.createElement('div');m.className='meta';
+              const t=document.createElement('b');t.textContent=f.name+(IMG.test(f.name)?'  →  '+f.name.replace(IMG,'.ast'):'');
+              const x=document.createElement('button');x.className='ghost';x.textContent='Remover';x.onclick=()=>{mk.files.splice(i,1);renderMk();};
+              m.append(t,x);r.append(m);b.append(r);
+            });
+          }
+          $('#mkFiles').addEventListener('change',e=>{mk.files.push(...e.target.files);e.target.value='';renderMk();});
+          $('#mkBuild').onclick=async e=>{
+            const btn=e.currentTarget,old=btn.textContent;btn.disabled=true;
+            try{
+              const name=($('#mkName').value||'MeuMod').trim(),safe=name.replace(/[^\w-]+/g,'_')||'MeuMod';
+              const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+              const cd=t=>'<![CDATA['+t.replace(/\]\]>/g,']]&gt;')+']]>';
+              const out=[];let icon='';
+              for(let i=0;i<mk.files.length;i++){
+                const f=mk.files[i];btn.textContent='Convertendo '+(i+1)+'/'+mk.files.length+'…';setProg(i,mk.files.length,'Criando o mod');
+                await new Promise(r=>setTimeout(r,0));
+                const buf=await f.arrayBuffer();let n=f.name,data;
+                if(IMG.test(n)){data=await buildAst({name:n,raw:async()=>buf},SC(),FL());n=n.replace(IMG,'.ast');if(!icon&&/^icon/i.test(n))icon=n;}
+                else data=new Uint8Array(buf);
+                out.push({name:n,data,method:0,crc:crc32(data),usz:data.length});
+              }
+              const dv=$('#mkDesc').value.trim(),desc=$('#mkText').value;
+              const xml='<?xml version="1.0" encoding="utf-8" standalone="no"?>\n<modDesc'+(dv?' descVersion="'+esc(dv)+'"':'')+'>\n  <author>'+esc($('#mkAuthor').value)+'</author>\n  <version>'+esc($('#mkVer').value)+'</version>\n  <title>\n    <en>'+esc(name)+'</en>\n    <pt>'+esc(name)+'</pt>\n  </title>\n  <description>\n    <en>'+cd(desc)+'</en>\n    <pt>'+cd(desc)+'</pt>\n  </description>\n'+(icon?'  <iconFilename>'+icon+'</iconFilename>\n':'')+'  <multiplayer supported="true"/>\n</modDesc>\n';
+              const add=(n,t)=>{const d=new TextEncoder().encode(t);out.unshift({name:n,data:d,method:0,crc:crc32(d),usz:d.length});};
+              if($('#mkI3d').checked)add(safe+'.i3d','<?xml version="1.0" encoding="iso-8859-1"?>\n<i3D name="'+safe+'" version="1.6" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://i3d.giants.ch/schema/i3d-1.6.xsd">\n  <Asset>\n    <Export program="GIANTS Editor 64bit" version="9.0.0"/>\n  </Asset>\n  <Files/>\n  <Materials/>\n  <Shapes/>\n  <Dynamics/>\n  <Scene>\n    <TransformGroup name="'+safe+'" nodeId="1"/>\n  </Scene>\n  <UserAttributes/>\n</i3D>\n');
+              add('modDesc.xml',xml);setProg(1,1,'Mod pronto');
+              await saveBlob(zipRaw(out),safe+'.zip');
+            }catch(err){alert('Falha ao criar o mod: '+(err.message||err));}
+            btn.disabled=false;btn.textContent=old;
+          };
+          function setProg(done,total,label){
+            const p=$('#prog');p.hidden=false;
+            const v=total?Math.min(100,Math.round(done/total*100)):100;
+            $('#pfill').style.width=v+'%';$('#pct').textContent=v+'%';$('#plab').textContent=label||'';
+          }
+          /* ---- modelar ---- */
+          const MD={objs:[],sel:null,n:0,yaw:.8,pitch:.5,dist:9,ptr:new Map(),list:[],moved:0};
+          const MN={box:'Cubo',cyl:'Cilindro',sph:'Esfera',cone:'Cone',plane:'Plano'};
+          const MCOL=['#8a6d3b','#3d6b34','#b8892f','#6d684f','#9b4a2c','#4a6f8a'];
+          const meshCache={};
+          const vsub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+          const vcross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+          const vdot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+          const vnorm=a=>{const l=Math.hypot(a[0],a[1],a[2])||1;return[a[0]/l,a[1]/l,a[2]/l];};
+          const triN=t=>vnorm(vcross(vsub(t[1],t[0]),vsub(t[2],t[0])));
+          function unitMesh(t){
+            if(meshCache[t])return meshCache[t];
+            let T=[];const q=(a,b,c,d)=>T.push([a,b,c],[a,c,d]);
+            if(t==='plane')q([-.5,0,.5],[.5,0,.5],[.5,0,-.5],[-.5,0,-.5]);
+            else if(t==='box'){
+              q([-.5,.5,.5],[.5,.5,.5],[.5,.5,-.5],[-.5,.5,-.5]);q([-.5,-.5,-.5],[.5,-.5,-.5],[.5,-.5,.5],[-.5,-.5,.5]);
+              q([-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]);q([.5,-.5,-.5],[-.5,-.5,-.5],[-.5,.5,-.5],[.5,.5,-.5]);
+              q([.5,-.5,.5],[.5,-.5,-.5],[.5,.5,-.5],[.5,.5,.5]);q([-.5,-.5,-.5],[-.5,-.5,.5],[-.5,.5,.5],[-.5,.5,-.5]);
+            }else if(t==='cyl'||t==='cone'){
+              const n=24,pt=(i,y)=>[Math.cos(i/n*6.283185)*.5,y,Math.sin(i/n*6.283185)*.5];
+              for(let i=0;i<n;i++){
+                if(t==='cyl'){q(pt(i,-.5),pt(i+1,-.5),pt(i+1,.5),pt(i,.5));T.push([[0,.5,0],pt(i+1,.5),pt(i,.5)]);}
+                else T.push([pt(i,-.5),pt(i+1,-.5),[0,.5,0]]);
+                T.push([[0,-.5,0],pt(i,-.5),pt(i+1,-.5)]);
+              }
+            }else{
+              const La=10,Lo=16,P=(a,b)=>{const th=a/La*Math.PI,ph=b/Lo*6.283185;return[.5*Math.sin(th)*Math.cos(ph),.5*Math.cos(th),.5*Math.sin(th)*Math.sin(ph)];};
+              for(let a=0;a<La;a++)for(let b=0;b<Lo;b++)q(P(a,b),P(a,b+1),P(a+1,b+1),P(a+1,b));
+            }
+            T=T.filter(tr=>Math.hypot(...vcross(vsub(tr[1],tr[0]),vsub(tr[2],tr[0])))>1e-9);
+            if(t!=='plane')T=T.map(tr=>{const n=vcross(vsub(tr[1],tr[0]),vsub(tr[2],tr[0])),c=[(tr[0][0]+tr[1][0]+tr[2][0])/3,(tr[0][1]+tr[1][1]+tr[2][1])/3,(tr[0][2]+tr[1][2]+tr[2][2])/3];return vdot(n,c)<0?[tr[0],tr[2],tr[1]]:tr;});
+            return meshCache[t]=T;
+          }
+          const D2R=Math.PI/180;
+          function xf(o,p){
+            let x=p[0]*o.scl[0],y=p[1]*o.scl[1],z=p[2]*o.scl[2];
+            const ax=o.rot[0]*D2R,ay=o.rot[1]*D2R,az=o.rot[2]*D2R,cx=Math.cos(ax),sx=Math.sin(ax),cy=Math.cos(ay),sy=Math.sin(ay),cz=Math.cos(az),sz=Math.sin(az);
+            let t=y*cx-z*sx;z=y*sx+z*cx;y=t;
+            t=x*cy+z*sy;z=-x*sy+z*cy;x=t;
+            t=x*cz-y*sz;y=x*sz+y*cz;x=t;
+            return[x+o.pos[0],y+o.pos[1],z+o.pos[2]];
+          }
+          function drawModel(){
+            const c=$('#mcv'),dpr=window.devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;
+            if(!W||!H)return;
+            if(c.width!==Math.round(W*dpr)||c.height!==Math.round(H*dpr)){c.width=Math.round(W*dpr);c.height=Math.round(H*dpr);}
+            const g=c.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
+            const cs=getComputedStyle(document.documentElement),css=k=>cs.getPropertyValue(k).trim();
+            g.fillStyle=css('--surface')||'#f7f2e5';g.fillRect(0,0,W,H);
+            const cp=Math.cos(MD.pitch),eye=[MD.dist*cp*Math.sin(MD.yaw),MD.dist*Math.sin(MD.pitch)+.5,MD.dist*cp*Math.cos(MD.yaw)];
+            const f=vnorm(vsub([0,.5,0],eye)),r=vnorm(vcross(f,[0,1,0])),u=vcross(r,f),F=Math.min(W,H)*1.1;
+            const P=p=>{const d=vsub(p,eye),z=vdot(d,f);if(z<.1)return null;return[W/2+F*vdot(d,r)/z,H/2-F*vdot(d,u)/z,z];};
+            const line=(a,b,col,w)=>{const A=P(a),B=P(b);if(!A||!B)return;g.strokeStyle=col;g.lineWidth=w;g.beginPath();g.moveTo(A[0],A[1]);g.lineTo(B[0],B[1]);g.stroke();};
+            for(let i=-10;i<=10;i++){line([i,0,-10],[i,0,10],css('--line')||'#ccc',1);line([-10,0,i],[10,0,i],css('--line')||'#ccc',1);}
+            line([0,0,0],[10,0,0],'#b3472b',2);line([0,0,0],[0,0,10],'#2b5fb3',2);
+            const L=vnorm([.4,.8,.5]),acc=css('--accent')||'#3d6b34',list=[];
+            for(const o of MD.objs){
+              const rgb=[1,3,5].map(k=>parseInt(o.color.slice(k,k+2),16));
+              for(const t of unitMesh(o.type)){
+                const w=t.map(p=>xf(o,p)),n=triN(w),cen=[(w[0][0]+w[1][0]+w[2][0])/3,(w[0][1]+w[1][1]+w[2][1])/3,(w[0][2]+w[1][2]+w[2][2])/3];
+                const facing=vdot(n,vsub(eye,cen));
+                if(o.type!=='plane'&&facing<=0)continue;
+                const k=.4+.6*Math.abs(vdot(n,L)),pp=w.map(P);
+                if(pp.some(x=>!x))continue;
+                list.push({pp,z:(pp[0][2]+pp[1][2]+pp[2][2])/3,id:o.id,fill:'rgb('+rgb.map(v=>Math.round(v*k)).join(',')+')'});
+              }
+            }
+            list.sort((a,b)=>b.z-a.z);MD.list=list;
+            for(const t of list){
+              const sel=t.id===MD.sel;
+              g.fillStyle=t.fill;g.strokeStyle=sel?acc:t.fill;g.lineWidth=sel?1.6:.7;
+              g.beginPath();g.moveTo(t.pp[0][0],t.pp[0][1]);g.lineTo(t.pp[1][0],t.pp[1][1]);g.lineTo(t.pp[2][0],t.pp[2][1]);g.closePath();g.fill();g.stroke();
+            }
+          }
+          function pickAt(e){
+            const R=$('#mcv').getBoundingClientRect(),x=e.clientX-R.left,y=e.clientY-R.top;
+            const sg=(ax,ay,bx,by,cx,cy)=>(ax-cx)*(by-cy)-(bx-cx)*(ay-cy);
+            let hit=null;
+            for(let i=MD.list.length-1;i>=0;i--){
+              const [a,b,c]=MD.list[i].pp,d1=sg(x,y,a[0],a[1],b[0],b[1]),d2=sg(x,y,b[0],b[1],c[0],c[1]),d3=sg(x,y,c[0],c[1],a[0],a[1]);
+              if(!((d1<0||d2<0||d3<0)&&(d1>0||d2>0||d3>0))){hit=MD.list[i].id;break;}
+            }
+            MD.sel=hit;renderModelUI();drawModel();
+          }
+          function addObj(t){
+            const id=++MD.n;
+            MD.objs.push({id,type:t,name:MN[t]+'_'+id,pos:[0,t==='plane'?0:.5,0],rot:[0,0,0],scl:[1,1,1],color:MCOL[(id-1)%MCOL.length]});
+            MD.sel=id;renderModelUI();drawModel();
+          }
+          function renderModelUI(){
+            const Lb=$('#mList');Lb.textContent='';
+            for(const o of MD.objs){const b=document.createElement('button');b.textContent=o.name;if(o.id!==MD.sel)b.className='ghost';b.onclick=()=>{MD.sel=o.id;renderModelUI();drawModel();};Lb.append(b);}
+            if(!MD.objs.length)Lb.textContent='Nenhum objeto. Adicione uma forma.';
+            const Pn=$('#mProps');Pn.textContent='';
+            const o=MD.objs.find(x=>x.id===MD.sel);if(!o)return;
+            const row=(lab,el)=>{const l=document.createElement('label');l.className='prop';const s=document.createElement('span');s.textContent=lab;l.append(s,el);Pn.append(l);};
+            const ti=document.createElement('input');ti.value=o.name;ti.oninput=()=>{o.name=ti.value;};ti.onchange=renderModelUI;row('Nome',ti);
+            for(const [lab,key,step] of [['Posição','pos',.1],['Rotação °','rot',5],['Escala','scl',.1]]){
+              const w=document.createElement('div');w.style.cssText='display:flex;gap:6px';
+              for(let k=0;k<3;k++){const i=document.createElement('input');i.type='number';i.step=step;i.value=+o[key][k].toFixed(3);i.oninput=()=>{const v=parseFloat(i.value);o[key][k]=isNaN(v)?0:v;drawModel();};w.append(i);}
+              row(lab,w);
+            }
+            const ci=document.createElement('input');ci.type='color';ci.value=o.color;ci.oninput=()=>{o.color=ci.value;drawModel();};row('Cor',ci);
+            const bar=document.createElement('div');bar.className='btns';
+            const b1=document.createElement('button');b1.className='ghost';b1.textContent='Duplicar';
+            b1.onclick=()=>{const id=++MD.n;MD.objs.push({...o,id,name:o.name+'_copia',pos:[o.pos[0]+.5,o.pos[1],o.pos[2]+.5],rot:[...o.rot],scl:[...o.scl]});MD.sel=id;renderModelUI();drawModel();};
+            const b2=document.createElement('button');b2.className='ghost';b2.textContent='Excluir';
+            b2.onclick=()=>{MD.objs=MD.objs.filter(x=>x.id!==o.id);MD.sel=null;renderModelUI();drawModel();};
+            bar.append(b1,b2);Pn.append(bar);
+          }
+          function genI3d(name){
+            const f=v=>(+v.toFixed(6)).toString(),esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+            const cols=[...new Set(MD.objs.map(o=>o.color))];
+            const mats=cols.map((c,i)=>'    <Material name="mat_'+(i+1)+'" materialId="'+(i+1)+'" diffuseColor="'+[1,3,5].map(k=>f(parseInt(c.slice(k,k+2),16)/255)).join(' ')+' 1"/>').join('\n');
+            let shapes='',scene='',nid=2;
+            MD.objs.forEach((o,i)=>{
+              const V=[],I=[];
+              unitMesh(o.type).forEach((t,k)=>{
+                const n=triN(t),ax=Math.abs(n[0]),ay=Math.abs(n[1]),az=Math.abs(n[2]);
+                t.forEach(p=>{const uv=ax>=ay&&ax>=az?[p[2]+.5,p[1]+.5]:ay>=az?[p[0]+.5,p[2]+.5]:[p[0]+.5,p[1]+.5];
+                  V.push('        <v p="'+p.map(f).join(' ')+'" n="'+n.map(f).join(' ')+'" t0="'+uv.map(f).join(' ')+'"/>');});
+                I.push('        <t i="'+(k*3)+' '+(k*3+1)+' '+(k*3+2)+'"/>');
+              });
+              shapes+='    <IndexedTriangleSet name="'+esc(o.name)+'" shapeId="'+(i+1)+'">\n      <Vertices count="'+V.length+'" normal="true" uv0="true">\n'+V.join('\n')+'\n      </Vertices>\n      <Subsets count="1">\n        <Subset firstVertex="0" numVertices="'+V.length+'" firstIndex="0" numIndices="'+I.length*3+'"/>\n      </Subsets>\n      <Triangles count="'+I.length+'">\n'+I.join('\n')+'\n      </Triangles>\n    </IndexedTriangleSet>\n';
+              scene+='      <Shape name="'+esc(o.name)+'" translation="'+o.pos.map(f).join(' ')+'" rotation="'+o.rot.map(f).join(' ')+'" scale="'+o.scl.map(f).join(' ')+'" nodeId="'+(nid++)+'" shapeId="'+(i+1)+'" materialIds="'+(cols.indexOf(o.color)+1)+'" castsShadows="true" receiveShadows="true"/>\n';
+            });
+            return '<?xml version="1.0" encoding="iso-8859-1"?>\n<i3D name="'+esc(name)+'" version="1.6" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://i3d.giants.ch/schema/i3d-1.6.xsd">\n  <Asset>\n    <Export program="GIANTS Editor 64bit" version="9.0.0"/>\n  </Asset>\n  <Files/>\n  <Materials>\n'+mats+'\n  </Materials>\n  <Shapes>\n'+shapes+'  </Shapes>\n  <Dynamics/>\n  <Scene>\n    <TransformGroup name="'+esc(name)+'" nodeId="1">\n'+scene+'    </TransformGroup>\n  </Scene>\n  <UserAttributes/>\n</i3D>\n';
+          }
+          const mName=()=>($('#mName').value||'meu_modelo').trim().replace(/[^\w-]+/g,'_')||'meu_modelo';
+          const mHas=()=>{if(!MD.objs.length){alert('Adicione ao menos uma forma.');return false;}return true;};
+          document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>addObj(b.dataset.t));
+          $('#mOpen').onclick=()=>{if(mHas())openI3D(genI3d(mName()),mName()+'.i3d',null);};
+          $('#mDl').onclick=()=>{if(!mHas())return;const d=new TextEncoder().encode(genI3d(mName()));saveBlob(zipRaw([{name:mName()+'.i3d',data:d,method:0,crc:crc32(d),usz:d.length}]),mName()+'.zip');};
+          $('#mSend').onclick=()=>{if(!mHas())return;mk.files.push(new File([genI3d(mName())],mName()+'.i3d',{type:'text/xml'}));renderMk();setTab('make');};
+          const mcv=$('#mcv');
+          mcv.addEventListener('pointerdown',e=>{mcv.setPointerCapture(e.pointerId);MD.ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});MD.moved=0;});
+          mcv.addEventListener('pointermove',e=>{
+            const p=MD.ptr.get(e.pointerId);if(!p)return;
+            if(MD.ptr.size===2){
+              const v=[...MD.ptr.values()],d0=Math.hypot(v[0].x-v[1].x,v[0].y-v[1].y);
+              p.x=e.clientX;p.y=e.clientY;
+              const d1=Math.hypot(v[0].x-v[1].x,v[0].y-v[1].y);
+              MD.dist=Math.max(2,Math.min(60,MD.dist*d0/Math.max(d1,1)));MD.moved=9;
+            }else{
+              MD.yaw-=(e.clientX-p.x)*.01;MD.pitch=Math.max(-1.4,Math.min(1.4,MD.pitch+(e.clientY-p.y)*.01));
+              MD.moved+=Math.abs(e.clientX-p.x)+Math.abs(e.clientY-p.y);p.x=e.clientX;p.y=e.clientY;
+            }
+            drawModel();
+          });
+          mcv.addEventListener('pointerup',e=>{const had=MD.ptr.delete(e.pointerId);if(had&&MD.moved<6&&!MD.ptr.size)pickAt(e);});
+          mcv.addEventListener('pointercancel',e=>MD.ptr.delete(e.pointerId));
+          mcv.addEventListener('wheel',e=>{e.preventDefault();MD.dist=Math.max(2,Math.min(60,MD.dist*(1+Math.sign(e.deltaY)*.1)));drawModel();},{passive:false});
+          window.addEventListener('resize',drawModel);
+          $('#pickdir').onclick=()=>$('#dir').click();
+          $('#dir').addEventListener('change',e=>{handle([...e.target.files]);e.target.value='';});
+          $('#opaque').addEventListener('change',()=>items.forEach(paint));
+          $('#all').onclick=async e=>{
+            const btn=e.currentTarget,old=btn.textContent;btn.disabled=true;
+            try{
+              const files=[];
+              for(let i=0;i<items.length;i++){
+                const it=items[i];
+                btn.textContent='Convertendo '+(i+1)+'/'+items.length+'…';
+                await new Promise(r=>setTimeout(r,0));
+                const b=await pngBlob(it);
+                files.push({name:(it.path||it.name).replace(IMG,'')+'.png',data:new Uint8Array(await b.arrayBuffer())});
+                setProg(i+1,items.length,'Convertendo para PNG');
+              }
+              await saveZip(files,'texturas-png.zip');
+            }catch(err){alert('Falha ao converter: '+(err.message||err));}
+            btn.disabled=false;btn.textContent=old;
+          };
+          $('#allast').onclick=()=>saveAST([...items],$('#allast'));
+          $('#clear').onclick=()=>{items.length=0;$('#list').textContent='';$('#modbar').textContent='';$('#cnt').textContent='0';$('#prog').hidden=true;$('#bar').hidden=true;};
+          </script>
+          </body>
+          </html>
+          FIM_6_ARQUIVO
+          base64 -d > app/src/main/res/mipmap-xxhdpi/ic_launcher.png <<'FIM_ICONE'
+          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
+          mTGpAAAAAElFTkSuQmCC
+          FIM_ICONE
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+      - name: Compilar
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DDS-para-PNG-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
